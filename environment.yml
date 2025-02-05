@@ -1,0 +1,10 @@
+name: infilenamewetrust
+
+channels:
+  - defaults
+
+dependencies:
+  - pip
+  - python=3.11
+  - pip:
+      - poetry==2.0.1
