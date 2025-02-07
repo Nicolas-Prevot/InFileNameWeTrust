@@ -58,7 +58,7 @@ poetry run encode /path/to/input_file /path/to/output_dir
 - **input_file**: The file you want to store in filenames.
 - **output_dir**: The directory to create the “chunk files.”
 - **Options**:
-    - `--chunk_size <N>`: Max BMP characters per chunk (default=240).
+  - `--chunk_size <N>`: Max BMP characters per chunk (default=240).
 
 ### Decoding
 
@@ -68,6 +68,13 @@ poetry run decode /path/to/output_dir /path/to/restored_file
 
 - **output_dir**: The directory containing the chunk files.
 - **restored_file**: Where to write the reconstructed data.
+
+### Example
+
+```bash
+poetry run encode README.md ./data
+poetry run decode ./data/README_md ./data/README.md
+```
 
 ## Fancy Ideas to Explore
 
