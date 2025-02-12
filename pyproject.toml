@@ -1,7 +1,7 @@
 [project]
 name = "infilenamewetrust"
 version = "0.1.0"
-description = ""
+description = "A whimsical experiment: store entire file contents in zero-byte filenames."
 authors = [
     {name = "Nicolas-Prevot",email = "nicolasprevot57@gmail.com"}
 ]
@@ -15,6 +15,7 @@ dependencies = [
 [project.scripts]
 encode = "infilenamewetrust.main:encode"
 decode = "infilenamewetrust.main:decode"
+test = "infilenamewetrust.main:test"
 
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]

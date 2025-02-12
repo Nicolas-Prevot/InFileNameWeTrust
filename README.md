@@ -9,41 +9,39 @@ No disclaimers—just pure madness. InFileNameWeTrust!
 ## How It Works
 
 1. **Compression**  
-   We first compress the input file with zlib to make it smaller and more uniform.
+   The input file is compressed with zlib.
 
-2. **Base-N Encoding**  
-   We interpret the compressed bytes as a large integer and convert it into base **N**, where **N** can be ~63,000–65,000. Our “digits” are **valid Unicode BMP characters** that Windows allows in filenames.
+2. **Base‑N Encoding**  
+   The compressed bytes are interpreted as a large integer and converted into a high‑base representation. The “digits” are valid Unicode BMP characters allowed in Windows filenames.
 
 3. **Chunking**  
-   Windows imposes a limit on filename length (usually 255 UTF-16 code units, or more with “long path” support). We split the encoded string into chunks short enough to fit within that limit. Each chunk becomes a **zero-byte file** named like: `000000__<chunk> 000001__<chunk> ...`
+   Since Windows limits filename length (usually 255 UTF‑16 code units), the encoded string is split into chunks small enough to serve as filenames. Each chunk becomes a **zero‑byte file** whose name encodes part of your data.
 
-4. **Decoding**
-    - We sort the files by numeric index (the `000000` part).  
-    - We concatenate all the chunks from the filenames.  
-    - We decode from base-N back to bytes.  
-    - We decompress with zlib, restoring the original file data.
-
-### Why Zero-Byte?
-
-Because **all** the data lives in the filenames, the file contents are empty. Yet collectively, these “empty” files reconstruct your original data. Only with Windows.
+4. **Decoding**  
+    - The filenames are sorted by their numeric prefix.
+    - The encoded chunks are concatenated.
+    - The data is decoded from base‑N back to bytes.
+    - zlib decompression restores the original file.
 
 ## Installation and Usage
 
-1. Clone the Repository
+1. **Clone the Repository**
 
     ```bash
     git clone https://github.com/Nicolas-Prevot/InFileNameWeTrust.git
     cd InFileNameWeTrust
     ```
 
-2. Start by instanciating your *Conda* environment (or favorite environment setup) by running the following command:
+2. **Create the Environment**
+
+    If you use Conda:
 
     ```bash
-    conda env create -v -f environment.yml
+    conda env create -f environment.yml
     conda activate infilenamewetrust
     ```
 
-3. Install project dependencies with *Poetry*:
+3. **Install with Poetry**
 
     ```bash
     poetry install
@@ -59,6 +57,7 @@ poetry run encode /path/to/input_file /path/to/output_dir
 - **output_dir**: The directory to create the “chunk files.”
 - **Options**:
   - `--chunk_size <N>`: Max BMP characters per chunk (default=240).
+  - `--segment_size <N>`: Compressed segment size in bytes (default: 300000).
 
 ### Decoding
 
@@ -66,14 +65,30 @@ poetry run encode /path/to/input_file /path/to/output_dir
 poetry run decode /path/to/output_dir /path/to/restored_file
 ```
 
-- **output_dir**: The directory containing the chunk files.
-- **restored_file**: Where to write the reconstructed data.
+- **input_dir**: The directory containing the chunk files.
+- **output_file**: Where to write the reconstructed data.
 
 ### Example
 
 ```bash
 poetry run encode README.md ./data
 poetry run decode ./data/README_md ./data/README.md
+```
+
+### Running Tests
+
+The repository includes pytest tests. To run the tests, execute:
+
+```bash
+poetry run pytest
+```
+
+### Build the Cython Module (Optional)
+
+From within `src/infilenamewetrust`, you can build the Cython extension with:
+
+```bash
+python setup.py build_ext --inplace
 ```
 
 ## Fancy Ideas to Explore
