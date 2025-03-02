@@ -13,10 +13,14 @@ dependencies = [
     "python-dotenv (>=1.0.1,<2.0.0)"
 ]
 
+[project.optional-dependencies]
+azure = [
+    "azure-storage-blob>=12.0.0"
+]
+
 [project.scripts]
 encode = "infilenamewetrust.main:encode"
 decode = "infilenamewetrust.main:decode"
-test = "infilenamewetrust.main:test"
 azure_encode = "infilenamewetrust.main_azure:azure_encode"
 azure_decode = "infilenamewetrust.main_azure:azure_decode"
 
