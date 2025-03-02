@@ -8,6 +8,10 @@ import os
 import zlib
 from typing import List, Tuple
 from loguru import logger
+from tqdm import tqdm
+import concurrent.futures
+from concurrent.futures import ThreadPoolExecutor
+from azure.storage.blob import ContainerClient
 
 from infilenamewetrust import cython_fastencode
 
@@ -31,6 +35,18 @@ def is_valid_bmp_char(cp: int) -> bool:
     if cp < 0x20 or cp == 0x7F:  # control chars
         return False
     if 0xD800 <= cp <= 0xDFFF:   # surrogates
+        return False
+    if 0x0080 <= cp <= 0x00A0:   # Azure
+        return False
+    if 0xFE00 <= cp <= 0xFE0F:   # Azure
+        return False
+    if 0xFFF0 <= cp <= 0xFFFC:   # Azure
+        return False
+    if 0xFD9E <= cp <= 0xFDFA:   # Azure
+        return False
+    if 0xFF9C <= cp <= 0xFFFD:   # Azure
+        return False
+    if cp in (0x00AD, 0xFEFF, 0xFFA0):
         return False
     if cp in (0x5C, 0x2F, 0x3A, 0x2A, 0x3F, 0x22, 0x3C, 0x3E, 0x7C):
         return False
@@ -58,6 +74,8 @@ def build_bmp_singleunit_alphabet():
 
 class InFileNameStorageCython:
     """
+    A manager class for storing data in filenames.
+
     Manager class that:
       - Compresses data.
       - Splits it into segments.
@@ -119,7 +137,7 @@ class InFileNameStorageCython:
         logger.info(f"Encoded length: {len(encoded)} characters")
         decoded: bytes = cython_fastencode.decode(encoded, self.chunk_bits, self.reverse_map)
         logger.info(f"Decoded length: {len(decoded)} bytes")
-        # Trim any padded bytes.
+
         decoded = decoded[:compressed_len]
         original_data = zlib.decompress(decoded)
         os.makedirs(os.path.dirname(output_file), exist_ok=True)
@@ -169,32 +187,27 @@ class InFileNameStorageCython:
     
         # Process each segment.
         seg_index = 0
-        for seg in segments:
+        for seg in tqdm(segments, total=len(segments)):
             seg_index += 1
             seg_len = len(seg)
-            # Create a 4-byte header to store the length of the original segment.
-            # (4 bytes is enough for segments up to 4GB.)
+
+            # Create a 4-byte header to store the length of the original segment. (enough for segments up to 4GB.)
             header = seg_len.to_bytes(4, byteorder="big")
             seg_with_header = header + seg
-    
-            # Encode the header+segment.
+
             encoded = cython_fastencode.encode(seg_with_header, self.chunk_bits, self.alphabet)
-    
-            # Create a folder for this segment (e.g. "part_00001").
+
             part_folder = os.path.join(main_folder, f"part_{seg_index:05d}")
             os.makedirs(part_folder, exist_ok=True)
     
-            # Split the encoded string into chunks (each chunk becomes a filename).
             chunks = [
                 encoded[i : i + self.chunk_size]
                 for i in range(0, len(encoded), self.chunk_size)
             ]
             file_idx_in_part = 0
             for chunk_data in chunks:
-                # Build the filename: use a numeric prefix then the chunk data.
                 filename = f"{file_idx_in_part:03d}_{chunk_data}"
                 filepath = os.path.join(part_folder, filename)
-                # Create an empty file; the file's name encodes the data.
                 with open(filepath, "wb"):
                     pass
                 file_idx_in_part += 1
@@ -232,7 +245,6 @@ class InFileNameStorageCython:
         # Process each segment folder in order.
         for part_idx, part_path in part_folders:
             seg_index += 1
-            # Gather the chunk files in this folder. Each file's name is of the form "NNN_<chunk>".
             file_entries: List[Tuple[int, str]] = []
             for fentry in os.scandir(part_path):
                 if fentry.is_file():
@@ -252,7 +264,6 @@ class InFileNameStorageCython:
             # Reassemble the encoded string for this segment.
             segment_str = "".join(chunk for _, chunk in file_entries)
     
-            # Decode the segment (this returns header + original segment + possible padding).
             dec_data = cython_fastencode.decode(segment_str, self.chunk_bits, self.reverse_map)
     
             if len(dec_data) < 4:
@@ -275,6 +286,270 @@ class InFileNameStorageCython:
         logger.info(f"Reassembled {seg_index} segments; total accumulated compressed size = {len(accumulated_compressed)} bytes.")
     
         # Decompress the reassembled compressed data.
+        original_data = zlib.decompress(accumulated_compressed)
+        os.makedirs(os.path.dirname(output_file), exist_ok=True)
+        with open(output_file, "wb") as f:
+            f.write(original_data)
+        logger.info(f"Decoded => wrote {len(original_data)} bytes to '{output_file}'.")
+
+
+    def encode_file_to_azure_blobs(self, input_file: str, container_client: ContainerClient, blob_prefix: str) -> None:
+        """
+        Compress and encode a file, splitting the encoded data into multiple Azure blobs.
+
+        Each segment is prefixed with a 4-byte header that stores its original length.
+        The Azure "blob name" will be used in the same way that local filenames are used
+        in encode_file_to_filenames.
+
+        Parameters
+        ----------
+        input_file : str
+            Path to the input file on local disk.
+        container_client : ContainerClient
+            The Azure ContainerClient instance where blobs will be uploaded.
+        blob_prefix : str
+            The 'folder' or 'prefix' under which all blobs for this file will live.
+        
+        Raises
+        ------
+        Exception
+            If an error occurs while uploading a blob.
+        """
+        base_name = os.path.basename(input_file)
+        logger.info(f"Reading and compressing '{base_name}' for Azure blob storage...")
+
+        # Read & compress the file
+        with open(input_file, "rb") as f:
+            original_data = f.read()
+        logger.info(f"Read {len(original_data)} bytes from '{input_file}'")
+
+        compressed_data = zlib.compress(original_data, level=9)
+        logger.info(f"Compressed to {len(compressed_data)} bytes")
+
+        # Segment the compressed data
+        segments: List[bytes] = []
+        start = 0
+        comp_len = len(compressed_data)
+        while start < comp_len:
+            end = min(start + self.segment_size, comp_len)
+            segments.append(compressed_data[start:end])
+            start = end
+        logger.info(
+            f"Divided compressed data into {len(segments)} segments (~{self.segment_size} bytes each)."
+        )
+
+        # Process each segment
+        for seg_index, seg in tqdm(enumerate(segments, start=1), total=len(segments)):
+            seg_len = len(seg)
+            # 4-byte header
+            header = seg_len.to_bytes(4, byteorder="big")
+            seg_with_header = header + seg
+
+            # Encode the header+segment
+            encoded = cython_fastencode.encode(seg_with_header, self.chunk_bits, self.alphabet)
+
+            # Split the encoded string into chunks (each chunk => a separate blob name)
+            chunks = [
+                encoded[i : i + self.chunk_size]
+                for i in range(0, len(encoded), self.chunk_size)
+            ]
+
+            # Create each blob
+            for chunk_idx, chunk_data in enumerate(chunks):
+                blob_name = f"{blob_prefix}/part_{seg_index:05d}/{chunk_idx:03d}_{chunk_data}"
+                try:
+                    container_client.upload_blob(name=blob_name, data=b"", overwrite=True)
+                except Exception as e:
+                    logger.error(f"Failed to create blob '{blob_name}': {e}")
+                    raise
+
+            logger.info(
+                f"Segment {seg_index} => Encoded length={len(encoded)}, "
+                f"wrote {len(chunks)} blobs under prefix '{blob_prefix}/part_{seg_index:05d}'."
+            )
+
+    def encode_file_to_azure_blobs_parallel(self, input_file: str, container_client: ContainerClient, blob_prefix: str, max_workers: int = 10) -> None:
+        """
+        Compress and encode a file, uploading chunk blobs in parallel using a thread pool.
+
+        Parameters
+        ----------
+        input_file : str
+            Path to the input file on local disk.
+        container_client : ContainerClient
+            The Azure ContainerClient instance where blobs will be uploaded.
+        blob_prefix : str
+            The 'folder' or 'prefix' under which all blobs for this file will be stored.
+        max_workers : int, optional
+            Maximum number of parallel upload threads, by default 10.
+
+        Raises
+        ------
+        Exception
+            If an error occurs while uploading a blob.
+        """
+        base_name = os.path.basename(input_file)
+        logger.info(f"Reading and compressing '{base_name}' for Azure blob storage (parallel upload)...")
+
+        # Read & compress
+        with open(input_file, "rb") as f:
+            original_data = f.read()
+        compressed_data = zlib.compress(original_data, level=9)
+        logger.info(f"Compressed {len(original_data)} bytes to {len(compressed_data)} bytes.")
+
+        # Segment
+        segments = []
+        start = 0
+        while start < len(compressed_data):
+            end = min(start + self.segment_size, len(compressed_data))
+            segments.append(compressed_data[start:end])
+            start = end
+
+        logger.info(f"Divided compressed data into {len(segments)} segments (~{self.segment_size} bytes each).")
+
+        # Process each segment
+        for seg_index, seg in enumerate(segments, start=1):
+            seg_len = len(seg)
+            header = seg_len.to_bytes(4, byteorder="big")
+            seg_with_header = header + seg
+
+            # Encode the header+segment
+            encoded = cython_fastencode.encode(seg_with_header, self.chunk_bits, self.alphabet)
+            chunks = [
+                encoded[i : i + self.chunk_size]
+                for i in range(0, len(encoded), self.chunk_size)
+            ]
+
+            part_prefix = f"{blob_prefix}/part_{seg_index:05d}"
+
+            futures = []
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                for chunk_idx, chunk_data in enumerate(chunks):
+                    blob_name = f"{part_prefix}/{chunk_idx:03d}_{chunk_data}"
+                    # Submit each upload in the background
+                    futures.append(
+                        executor.submit(
+                            container_client.upload_blob,
+                            name=blob_name,
+                            data=b"",
+                            overwrite=True
+                        )
+                    )
+
+                # Wait for all uploads to finish
+                for future in concurrent.futures.as_completed(futures):
+                    try:
+                        future.result()
+                    except Exception as e:
+                        logger.error(f"Error uploading blob: {e}")
+                        raise
+
+            logger.info(
+                f"Segment {seg_index} => Encoded length={len(encoded)}, "
+                f"wrote {len(chunks)} blobs under prefix '{part_prefix}'."
+            )
+
+
+    def decode_azure_blobs_to_file(self, container_client: ContainerClient, blob_prefix: str, output_file: str) -> None:
+        """
+        Reassemble and decode the file data from Azure blobs.
+
+        Parameters
+        ----------
+        container_client : ContainerClient
+            The Azure ContainerClient instance from which blobs will be downloaded.
+        blob_prefix : str
+            The common prefix under which the relevant blobs reside.
+        output_file : str
+            Path to write the decoded file on local disk.
+
+        Raises
+        ------
+        ValueError
+            If no blobs matching the encoding scheme are found.
+        """
+        logger.info(f"Reading blobs from prefix '{blob_prefix}' to reconstruct file...")
+
+        all_blobs = container_client.list_blobs(name_starts_with=blob_prefix)
+
+        # We'll keep them organized as: { seg_index: [(file_idx, chunk_data), ...], ... }
+        segments_map = {}
+
+        for blob in all_blobs:
+            blob_name = blob.name  # e.g. "mydata/video_mp4/part_00001/000_chunk"
+            if not blob_name.startswith(blob_prefix):
+                continue
+
+            relative_name = blob_name[len(blob_prefix) : ].lstrip("/")  # e.g. "part_00001/000_chunk"
+            if not relative_name.startswith("part_"):
+                # Not a recognized blob for our scheme
+                continue
+
+            seg_folder, _, remainder = relative_name.partition("/")
+            if not remainder:
+                # It's an empty "folder", skip
+                continue
+
+            try:
+                seg_index_str = seg_folder[5:]
+                seg_index = int(seg_index_str)
+            except ValueError:
+                logger.warning(f"Skipping blob with unrecognized folder name: {blob_name}")
+                continue
+
+            chunk_split = remainder.split("_", 1)
+            if len(chunk_split) != 2:
+                logger.warning(f"Skipping blob with unrecognized chunk name: {blob_name}")
+                continue
+
+            file_idx_str, chunk_data = chunk_split
+            try:
+                fidx = int(file_idx_str)
+            except ValueError:
+                logger.warning(f"Skipping blob with unrecognized chunk name: {blob_name}")
+                continue
+
+            segments_map.setdefault(seg_index, []).append((fidx, chunk_data))
+
+        sorted_seg_indices = sorted(segments_map.keys())
+        if not sorted_seg_indices:
+            raise ValueError(f"No blobs found under prefix '{blob_prefix}' that match our encoding scheme.")
+
+        accumulated_compressed = bytearray()
+        segment_count = 0
+
+        for seg_index in sorted_seg_indices:
+            segment_count += 1
+            file_entries = segments_map[seg_index]
+            file_entries.sort(key=lambda x: x[0])
+            segment_str = "".join(chunk_data for _, chunk_data in file_entries)
+
+            dec_data = cython_fastencode.decode(segment_str, self.chunk_bits, self.reverse_map)
+            if len(dec_data) < 4:
+                logger.error(
+                    f"Segment {seg_index}: decoded data is too short to contain a header."
+                )
+                continue
+
+            expected_seg_len = int.from_bytes(dec_data[:4], byteorder="big")
+            seg_data = dec_data[4 : 4 + expected_seg_len]
+            if len(seg_data) != expected_seg_len:
+                logger.warning(
+                    f"Segment {seg_index}: expected {expected_seg_len} bytes, "
+                    f"got {len(seg_data)} bytes after trimming."
+                )
+
+            accumulated_compressed.extend(seg_data)
+            logger.info(
+                f"Segment {seg_index}: header indicated {expected_seg_len} bytes, "
+                f"decoded {len(seg_data)} bytes."
+            )
+
+        logger.info(
+            f"Reassembled {segment_count} segments; total accumulated compressed size = "
+            f"{len(accumulated_compressed)} bytes."
+        )
+
         original_data = zlib.decompress(accumulated_compressed)
         os.makedirs(os.path.dirname(output_file), exist_ok=True)
         with open(output_file, "wb") as f:

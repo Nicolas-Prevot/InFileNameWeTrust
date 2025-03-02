@@ -59,6 +59,7 @@ def test() -> None:
     storage = InFileNameStorageCython(chunk_size=190, segment_size=300_000)
     storage.test_encode_decode(args.input_file, args.output_file)
 
+
 if __name__ == "__main__":
     # Dispatch based on the invoked script name
     import sys
