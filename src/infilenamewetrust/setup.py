@@ -1,6 +1,5 @@
 from setuptools import setup, Extension
 from Cython.Build import cythonize
-import sys
 
 extensions = [
     Extension(
@@ -17,4 +16,3 @@ setup(
         compiler_directives={"language_level": "3"}
     ),
 )
-# python setup.py build_ext --inplace
