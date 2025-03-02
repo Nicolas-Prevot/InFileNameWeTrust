@@ -141,7 +141,7 @@ dmypy.json
 cython_debug/
 
 # Poetry
-# poetry.lock
+poetry.lock
 
 # PyCharm files
 .idea/
