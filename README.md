@@ -75,6 +75,21 @@ poetry run encode README.md ./data
 poetry run decode ./data/README_md ./data/README.md
 ```
 
+## Azure usage
+
+```bash
+poetry run azure_encode /path/to/input_file container_name blob_prefix --chunk_size 3650 --segment_size 6_200_000
+```
+
+```bash
+poetry run azure_decode container_name blob_prefix /path/to/restored_file
+```
+
+```bash
+poetry run azure_encode "C:/Users/Utilisateur/Downloads/image.png" "test1" "data/image_0"
+poetry run azure_decode "test1" "data/image_0" "./data/image_0.png"
+```
+
 ### Running Tests
 
 The repository includes pytest tests. To run the tests, execute:

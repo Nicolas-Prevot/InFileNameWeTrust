@@ -9,13 +9,16 @@ readme = "README.md"
 requires-python = ">=3.10,<4.0"
 dependencies = [
     "loguru (>=0.7.3,<0.8.0)",
-    "tqdm (>=4.67.1,<5.0.0)"
+    "tqdm (>=4.67.1,<5.0.0)",
+    "python-dotenv (>=1.0.1,<2.0.0)"
 ]
 
 [project.scripts]
 encode = "infilenamewetrust.main:encode"
 decode = "infilenamewetrust.main:decode"
 test = "infilenamewetrust.main:test"
+azure_encode = "infilenamewetrust.main_azure:azure_encode"
+azure_decode = "infilenamewetrust.main_azure:azure_decode"
 
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]
